@@ -1,5 +1,6 @@
 import re
 import pandas as pd
+from tabulate import tabulate
 
 # 单词符号及其种别码和类型描述
 token_patterns = [
@@ -27,10 +28,10 @@ token_patterns = [
     (r'\.', 'code_32', '点运算符'),
     (r':', 'code_33', '冒号'),
     (r';', 'code_34', '分号'),
-    (r'>', 'code_35', '大于比较符'),
-    (r'<', 'code_36', '小于比较符'),
     (r'>=', 'code_37', '大于等于比较符'),
     (r'<=', 'code_38', '小于等于比较符'),
+    (r'>', 'code_35', '大于比较符'),
+    (r'<', 'code_36', '小于比较符'),
     (r'!=', 'code_40', '不等于比较符'),
     (r'\\0', 'code_1000', '空字符'),
     (r'ERROR', 'code_m1', '错误')  # 通配符匹配其他所有字符
@@ -85,6 +86,10 @@ def parser(tokens):
         """根据字符位置获取行号"""
         return prog[:pos].count('\n') + 1
 
+    def error(message):
+        """自定义错误报告函数，带行号信息"""
+        raise SyntaxError(f"Error at line {get_line_number(tokens[0][3])}: {message}. Token: {tokens[0]}")
+
     def program():
         if tokens[0][0] == 'main' and tokens[0][1] == '1':
             tokens.pop(0)
@@ -93,7 +98,7 @@ def parser(tokens):
                 if tokens[0][0] == ')' and tokens[0][1] == '27':
                     tokens.pop(0)
                     return statement_block()
-        raise SyntaxError(f"Invalid program at line {get_line_number(tokens[0][3])}, tips: {tokens[0]}")
+        error("Expected 'main' function with valid parentheses.")
 
     def statement_block():
         if tokens[0][0] == '{' and tokens[0][1] == '30':
@@ -106,10 +111,11 @@ def parser(tokens):
             if tokens[0][0] == '}' and tokens[0][1] == '31':
                 tokens.pop(0)
                 return True
+            error("Expected closing '}' for statement block.")
         elif tokens and (tokens[0][0] in ['if', 'while'] or tokens[0][1] == '10'):
             statement()
             return True
-        raise SyntaxError(f"Invalid statement block at line {get_line_number(tokens[0][3])}, tips: {tokens[0]}")
+        error("Expected statement or statement block.")
 
     def statement():
         if tokens[0][0] == 'if' and tokens[0][1] == '4':
@@ -119,7 +125,7 @@ def parser(tokens):
         elif tokens[0][2] == '标识符' and tokens[0][1] == '10':
             return assignment_statement()
         else:
-            raise SyntaxError(f"Invalid statement at line {get_line_number(tokens[0][3])}, tips: {tokens[0]}")
+            error("Unexpected statement.")
 
     def if_statement():
         nonlocal tokens, quads, label_count
@@ -130,7 +136,6 @@ def parser(tokens):
                 condition_result = condition()  # 获取比较结果的临时变量
                 if tokens[0][0] == ')' and tokens[0][1] == '27':
                     tokens.pop(0)
-                    # 生成跳转三地址代码
                     if_true_label = f'L{label_count}'
                     label_count += 1
                     if_false_label = f'L{label_count}'
@@ -138,10 +143,11 @@ def parser(tokens):
                     quads.append(Quad('ifFalse', condition_result, '', if_false_label))
                     quads.append(Quad('goto', '', '', if_true_label))
                     quads.append(Quad('label', '', '', if_true_label))
-                    statement_block()  # 执行if语句块
-                    quads.append(Quad('label', '', '', if_false_label))  # 如果条件不成立，跳到else部分
+                    statement_block()
+                    quads.append(Quad('label', '', '', if_false_label))
                     return True
-        raise SyntaxError(f"Invalid if statement at line {get_line_number(tokens[0][3])}, tips: {tokens[0]}")
+            error("Expected closing ')' for if condition.")
+        error("Invalid 'if' statement.")
 
     def while_statement():
         nonlocal tokens, quads, label_count
@@ -150,21 +156,20 @@ def parser(tokens):
             label_count += 1
             end_label = f'L{label_count}'
             label_count += 1
-            quads.append(Quad('label', '', '', start_label))  # While的开始标签
+            quads.append(Quad('label', '', '', start_label))
             tokens.pop(0)
             if tokens[0][0] == '(' and tokens[0][1] == '26':
                 tokens.pop(0)
-                condition_result = condition()  # 获取条件表达式的计算结果
+                condition_result = condition()
                 if tokens[0][0] == ')' and tokens[0][1] == '27':
                     tokens.pop(0)
-                    # 生成while语句的跳转
-                    quads.append(Quad('ifFalse', condition_result, '', end_label))  # 条件为False时跳出循环
-                    # quads.append(Quad('label', '', '', start_label))  # 进入循环体
+                    quads.append(Quad('ifFalse', condition_result, '', end_label))
                     statement_block()
-                    quads.append(Quad('goto', '', '', start_label))  # 如果条件成立，跳回start_label
-                    quads.append(Quad('label', '', '', end_label))  # while循环结束后的标签
+                    quads.append(Quad('goto', '', '', start_label))
+                    quads.append(Quad('label', '', '', end_label))
                     return True
-        raise SyntaxError(f"Invalid while statement at line {get_line_number(tokens[0][3])}, tips: {tokens[0]}")
+            error("Expected closing ')' for while condition.")
+        error("Invalid 'while' statement.")
 
     def assignment_statement():
         nonlocal tokens, quads, temp_count
@@ -172,37 +177,27 @@ def parser(tokens):
             target = tokens.pop(0)[0]
             if tokens and tokens[0][0] == '=' and tokens[0][1] == '21':
                 tokens.pop(0)
-                expr_result = expression()  # 获取右侧表达式的计算结果
-                quads.append(Quad('=', expr_result, '', target))  # 生成赋值三地址代码
+                expr_result = expression()
+                quads.append(Quad('=', expr_result, '', target))
                 return True
-        raise SyntaxError(f"Invalid assignment statement at line {get_line_number(tokens[0][3])}, tips: {tokens[0]}")
+            error("Expected '=' for assignment.")
+        error("Invalid assignment statement.")
 
     def condition():
         nonlocal tokens, quads, temp_count
-
-        # 解析条件表达式
-        left_expr_result = expression()  # 获取左侧的表达式结果
-
-        # 解析条件运算符 (<, >, <=, >=, ==, !=)
+        left_expr_result = expression()
         if tokens[0][0] in ['<', '>', '<=', '>=', '==', '!='] and tokens[0][1] in ['35', '36', '37', '38', '39', '40']:
-            op = tokens.pop(0)[0]  # 获取比较运算符
-            right_expr_result = expression()  # 解析右侧的表达式
-
-            # 为条件表达式生成一个临时变量来保存比较结果
+            op = tokens.pop(0)[0]
+            right_expr_result = expression()
             temp_count += 1
             temp_var = f't{temp_count}'
-
-            # 生成三地址代码：比较运算
             quads.append(Quad(op, left_expr_result, right_expr_result, temp_var))
-
-            # 返回临时变量作为条件判断的结果
             return temp_var
-
-        raise SyntaxError(f"Invalid condition at line {get_line_number(tokens[0][3])}, tips: {tokens[0]}")
+        error("Invalid condition operator or missing expression.")
 
     def expression():
         nonlocal tokens, quads, temp_count
-        term_result = term()  # 处理表达式中的项
+        term_result = term()
         while tokens and tokens[0][0] in ['+', '-', '*', '/'] and tokens[0][1] in ['22', '23', '24', '25']:
             op = tokens.pop(0)[0]
             next_term_result = term()
@@ -214,25 +209,24 @@ def parser(tokens):
 
     def term():
         nonlocal tokens, quads, temp_count
-        # 处理项中的操作符
         if tokens[0][0] == '(' and tokens[0][1] == '26':
             tokens.pop(0)
             result = expression()
             if tokens[0][0] == ')' and tokens[0][1] == '27':
                 tokens.pop(0)
+            else:
+                error("Expected closing ')' for expression.")
             return result
         elif tokens[0][2] == '数字字面量' and tokens[0][1] == '20':
             return tokens.pop(0)[0]
         elif tokens[0][2] == '标识符' and tokens[0][1] == '10':
             return tokens.pop(0)[0]
+        error("Invalid term.")
 
-        raise SyntaxError(f"Invalid term at line {get_line_number(tokens[0][3])}, tips: {tokens[0]}")
-
-    # 执行程序的分析
     try:
         program()
         if tokens:
-            raise SyntaxError(f"Unexpected tokens remaining at line {get_line_number(tokens[0][3])}, tips: {tokens[0]}")
+            error("Unexpected tokens remaining.")
         return quads
     except SyntaxError as e:
         print(f"解析过程中发生错误: {e}")
@@ -253,7 +247,7 @@ def main():
 
     # 打印结果
     print("\n词法分析结果:")
-    print(df[['单词符号', '种别码', '类型描述']].to_string(index=False))
+    print(tabulate(df[['单词符号', '种别码', '类型描述']], headers='keys', tablefmt='grid'))
 
     # 将结果写入Excel
     df.to_excel('词法分析结果.xlsx', index=False, engine='openpyxl')
@@ -264,6 +258,14 @@ def main():
     for quad in quads:
         print(quad)
 
+    # 将三地址代码写入 output.txt
+    with open('output.txt', 'w', encoding='utf-8') as output_file:
+        for quad in quads:
+            output_file.write(str(quad) + '\n')
+
 
 if __name__ == "__main__":
     main()
+    while True:
+        if input("输入’#‘退出程序：") == '#':
+            break
